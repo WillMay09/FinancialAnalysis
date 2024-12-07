@@ -2,18 +2,22 @@ import concurrent
 from langchain.schema import Document
 from langchain_pinecone import PineconeVectorStore
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from main import get_stock_info
+from fetchingData import get_huggingface_embeddings, get_stock_info
 from stockTickers import get_company_tickers
 import streamlit as st
 import yfinance as yf
 import time
-from main import yahoo_tickers
+from fetchingData import yahoo_tickers
+from pinecone import Pinecone
 pinecone_api_key = st.secrets["PINECONE_API_KEY"]
 
 
 index_name = "stocks"
 namespace = "stock-descriptions"
 hf_embeddings = "stock-descriptions"
+
+pc = Pinecone(api_key=pinecone_api_key)
+pinecone_index = pc.Index(index_name)
 
 hf_embeddings = HuggingFaceEmbeddings()
 vectorstore = PineconeVectorStore(index_name=index_name, embedding=hf_embeddings)
@@ -100,36 +104,15 @@ def parallel_process_stocks(tickers: list, max_workers: int = 10) -> None:
 tickers_to_process = [yahoo_tickers[num]['ticker'] for num in yahoo_tickers.keys()]
 
 # Process them
-parallel_process_stocks(tickers_to_process, max_workers=15)
-# for idx, stock in yahoo_tickers.items():
-#     stock_ticker = stock['ticker']
+#parallel_process_stocks(tickers_to_process, max_workers=10)
 
-#     try:
-#         stock_data = get_stock_info(stock_ticker)
-#         stock_description = stock_data['Business Summary'] if stock_data['Business Summary'] != 'Information not available' else 'No description available'
+#retrieve stock data based on a query
+def retrieve_matching_data(query):
+   #embed the user's query
+   raw_query_embedding = get_huggingface_embeddings(query)
+   top_matches = pinecone_index.query(vector=raw_query_embedding.tolist(), top_k=5, include_metadata=True, namespace=namespace)
+   #formatting
+   contexts = [item['metadata']['text'] for item in top_matches['matches']]
+   augmented_query = "<CONTEXT>\n" + "\n\n-------\n\n".join(contexts[ : 10]) + "\n-------\n</CONTEXT>\n\n\n\nMY QUESTION:\n" + query
 
-#         print(f"Processing stock {idx} / {len(yahoo_tickers) - 1}: {stock_ticker}",end="\r")
-
-#         vectorstore_from_documents = PineconeVectorStore.from_documents(
-#             documents=[Document(page_content=stock_description, metadata=stock_data)],
-#             embedding=hf_embeddings,
-#             index_name=index_name,
-#             namespace=namespace
-#         )
-
-#         print(f"Successfully processed stock {idx} / {len(yahoo_tickers) - 1}: {stock_ticker}")
-        
-#         with open("successful_tickers.txt", "a") as success_file:
-#             success_file.write(f"{stock_ticker}\n")
-#     except Exception as e:
-#         print(f"Error processing stock {idx} / {len(yahoo_tickers) - 1} ({stock_ticker}): {e}")
-#         with open("unsuccessful_tickers.txt", "a") as error_file:
-#             error_file.write(f"{stock_ticker}\n")
-
-#         if str(e) == "can't start new thread":
-#             print("Stock processing failed due to thread limit. Terminating the process...")
-#             break
-        
-#     if int(idx) and int(idx) % 500 == 0:
-#         print("Sleeping for 2 minutes to avoid rate limiting...")
-#         time.sleep(120)
+   return augmented_query
